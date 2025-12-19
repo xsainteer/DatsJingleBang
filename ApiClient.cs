@@ -17,4 +17,20 @@ public class ApiClient
         _httpClient.BaseAddress = new Uri(BASE_URL);
         _httpClient.DefaultRequestHeaders.Add("X-Auth-Token", TOKEN);
     }
+
+
+    public async Task<string> GetMapAsync()
+    {
+        try
+        {
+            var response = await _httpClient.GetAsync("api/arena");
+            response.EnsureSuccessStatusCode();
+            return await response.Content.ReadAsStringAsync();
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error fetching map: {ex.Message}");
+            throw;
+        }
+    }
 }
