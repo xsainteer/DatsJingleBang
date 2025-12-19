@@ -34,5 +34,47 @@ public class ApiClient
         }
     }
 
-    
+    public async Task<string> GetBoostersAsync()
+    {
+        try
+        {
+            var response = await _httpClient.GetAsync("api/booster");
+            response.EnsureSuccessStatusCode();
+            return await response.Content.ReadAsStringAsync();
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error fetching boosters: {ex.Message}");
+            return "";
+        }
+    }
+
+    public async Task<string> GetCheatCode()
+    {
+        try
+        {
+            var response = await _httpClient.GetAsync("api/cheatcode");
+            response.EnsureSuccessStatusCode();
+            return await response.Content.ReadAsStringAsync();
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine("ex " + ex);
+            return null;
+        }
+      
+    }
+    public async Task PostActivateBooster()
+    {
+        try
+        {
+            var response = await _httpClient.PostAsync("api/booster/", null);
+            response.EnsureSuccessStatusCode();
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error activating booster: {ex.Message}");
+        }
+    }
+
 }
