@@ -34,4 +34,6 @@ public static class GameConstants
 
     // Limits
     public const int RequestsPerSecond = 3;
+
+    public const string Token = "1a2c754b-f47f-4cc8-b9a4-777556ac27af";
 }
