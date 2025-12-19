@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <title>DatsJingleBang Monitor Ultra</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        #gameCanvas {
+            background-color: #1a1a1a;
+            image-rendering: pixelated;
+            box-shadow: 0 0 50px rgba(0,0,0,0.5);
+            transition: transform 0.1s ease-out; /* Плавный зум */
+        }
+        /* Стилизуем полосу прокрутки для карты */
+        #map-container::-webkit-scrollbar { width: 8px; height: 8px; }
+        #map-container::-webkit-scrollbar-thumb { background: #3f3f46; border-radius: 4px; }
+        
+        .sidebar-hidden { width: 0 !important; min-width: 0 !important; padding: 0 !important; overflow: hidden; border: none !important; }
+    </style>
+</head>
+<body class="bg-zinc-950 text-zinc-100 font-sans h-screen flex overflow-hidden">
+
+    <aside id="sidebar" class="w-80 min-w-[320px] border-r border-zinc-800 p-6 flex flex-col gap-6 bg-zinc-900/80 transition-all duration-300 relative">
+        <header>
+            <h1 class="text-xl font-black text-yellow-500 italic leading-none">BOOM MONITOR</h1>
+            <p id="round-name" class="text-[10px] text-zinc-500 font-mono mt-1 uppercase tracking-tighter">Round: Loading...</p>
+        </header>
+
+        <div class="bg-zinc-800 rounded-xl p-4 border border-zinc-700/50 shadow-inner">
+            <p class="text-zinc-500 text-[10px] uppercase font-bold tracking-widest">Score</p>
+            <p id="total-score" class="text-3xl font-mono font-bold text-green-400">0</p>
+        </div>
+
+        <section class="flex-1 flex flex-col min-h-0">
+            <h2 class="text-xs font-bold mb-3 text-zinc-400 uppercase tracking-widest">Units</h2>
+            <div id="units-list" class="flex flex-col gap-2 overflow-y-auto pr-2"></div>
+        </section>
+
+        <button onclick="toggleSidebar()" class="absolute -right-3 top-1/2 bg-zinc-800 border border-zinc-700 w-6 h-12 rounded-full flex items-center justify-center hover:bg-zinc-700 transition-colors z-50">
+            <span class="text-[10px] text-zinc-400 font-bold">||</span>
+        </button>
+    </aside>
+
+    <main class="flex-1 flex flex-col h-screen relative bg-[#050505]">
+        
+        <div class="absolute top-4 left-4 right-4 z-40 flex justify-between items-center pointer-events-none">
+            <div class="flex gap-2 pointer-events-auto bg-zinc-900/90 p-2 rounded-lg border border-zinc-800 shadow-2xl">
+                <span class="text-[10px] font-bold text-zinc-500 uppercase self-center px-2">Zoom</span>
+                <input id="zoom-slider" type="range" min="16" max="64" value="32" class="w-32 accent-yellow-500">
+                <span id="zoom-value" class="text-[10px] font-mono text-zinc-300 w-8 text-center">32px</span>
+            </div>
+
+            <div class="flex gap-2 pointer-events-auto bg-zinc-900/90 p-2 rounded-lg border border-zinc-800 shadow-2xl">
+                <input id="token-input" type="password" placeholder="API TOKEN" class="bg-black border border-zinc-700 px-3 py-1 rounded text-[10px] w-32 focus:border-yellow-500 outline-none">
+                <button id="btn-status" class="bg-green-600 hover:bg-green-500 px-3 py-1 rounded text-[10px] font-bold uppercase tracking-wider">Start</button>
+            </div>
+        </div>
+
+        <div id="map-container" class="flex-1 overflow-auto flex items-center justify-center p-10">
+            <canvas id="gameCanvas"></canvas>
+        </div>
+    </main>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        let tileSize = 32;
+
+        const zoomSlider = document.getElementById('zoom-slider');
+        const zoomValueDisp = document.getElementById('zoom-value');
+
+        zoomSlider.addEventListener('input', (e) => {
+            tileSize = parseInt(e.target.value);
+            zoomValueDisp.innerText = tileSize + 'px';
+            drawMap(); // Перерисовываем с новым размером
+        });
+
+        // Конфигурация подключения
+        let config = {
+            token: localStorage.getItem('dats_token') || '',
+            server: 'https://games-test.datsteam.dev', // По умолчанию тестовый
+            isPolling: false
+        };
+
+        let gameState = {
+            map_size: [0, 0],
+            arena: { walls: [], obstacles: [], bombs: [] },
+            bombers: [],
+            enemies: [],
+            mobs: [],
+            raw_score: 0,
+            round: 'Ожидание...'
+        };
+
+        // Функция для получения данных с сервера
+        async function fetchGameState() {
+            if (!config.token || !config.isPolling) return;
+
+            try {
+                const response = await fetch(`${config.server}/api/arena`, {
+                    method: 'GET',
+                    headers: {
+                        'X-Auth-Token': config.token,
+                        'Content-Type': 'application/json'
+                    }
+                });
+
+                if (response.status === 401 || response.status === 403) {
+                    console.error('Ошибка авторизации. Проверьте токен.');
+                    stopPolling();
+                    return;
+                }
+
+                const data = await response.json();
+                
+                // Обновляем состояние игры данными из API
+                gameState = {
+                    ...gameState,
+                    map_size: data.map_size || [0, 0],
+                    arena: data.arena || { walls: [], obstacles: [], bombs: [] },
+                    bombers: data.bombers || [],
+                    enemies: data.enemies || [],
+                    mobs: data.mobs || [],
+                    raw_score: data.raw_score || 0,
+                    round: data.round || 'Unknown'
+                };
+
+                drawMap();
+                updateUI();
+            } catch (err) {
+                console.error('Ошибка сети:', err);
+            }
+        }
+
+        // Отрисовка карты
+        function drawMap() {
+            const [width, height] = gameState.map_size;
+            if (width === 0) return;
+
+            canvas.width = width * tileSize;
+            canvas.height = height * tileSize;
+
+            ctx.fillStyle = '#111';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            
+            // Стены
+            ctx.fillStyle = '#3f3f46';
+            gameState.arena.walls.forEach(([x, y]) => {
+                ctx.fillRect(x * tileSize, y * tileSize, tileSize - 1, tileSize - 1);
+            });
+
+            // Ящики
+            ctx.fillStyle = '#713f12';
+            gameState.arena.obstacles.forEach(([x, y]) => {
+                ctx.beginPath();
+                ctx.roundRect(x * tileSize + 2, y * tileSize + 2, tileSize - 4, tileSize - 4, 4);
+                ctx.fill();
+            });
+
+            // Бомбы
+            gameState.arena.bombs.forEach(bomb => {
+                const x = bomb.pos[0] * tileSize + tileSize/2;
+                const y = bomb.pos[1] * tileSize + tileSize/2;
+                
+                ctx.fillStyle = '#ef4444';
+                ctx.beginPath();
+                ctx.arc(x, y, tileSize/3, 0, Math.PI * 2);
+                ctx.fill();
+                
+                ctx.fillStyle = 'white';
+                ctx.font = 'bold 10px monospace';
+                ctx.textAlign = 'center';
+                ctx.fillText(bomb.timer.toFixed(1), x, y + 4);
+            });
+
+            // Мобы
+            gameState.mobs.forEach(mob => {
+                ctx.fillStyle = mob.type === 'ghost' ? '#a855f7' : '#db2777';
+                ctx.beginPath();
+                ctx.arc(mob.pos[0] * tileSize + tileSize/2, mob.pos[1] * tileSize + tileSize/2, tileSize/4, 0, Math.PI * 2);
+                ctx.fill();
+            });
+
+            // Юниты игрока
+            gameState.bombers.forEach(b => {
+                if (!b.alive) return;
+                const x = b.pos[0] * tileSize;
+                const y = b.pos[1] * tileSize;
+
+                ctx.fillStyle = '#3b82f6';
+                ctx.fillRect(x + 4, y + 4, tileSize - 8, tileSize - 8);
+
+                if (b.armor > 0) {
+                    ctx.strokeStyle = '#fbbf24';
+                    ctx.lineWidth = 2;
+                    ctx.strokeRect(x + 2, y + 2, tileSize - 4, tileSize - 4);
+                }
+            });
+
+            // Враги
+            gameState.enemies.forEach(e => {
+                ctx.fillStyle = '#b91c1c';
+                ctx.fillRect(e.pos[0] * tileSize + 6, e.pos[1] * tileSize + 6, tileSize - 12, tileSize - 12);
+            });
+        }
+
+        function updateUI() {
+            document.getElementById('total-score').innerText = gameState.raw_score.toLocaleString();
+            document.getElementById('round-name').innerText = `Раунд: ${gameState.round}`;
+            
+            const list = document.getElementById('units-list');
+            list.innerHTML = '';
+
+            gameState.bombers.forEach(b => {
+                const card = document.createElement('div');
+                card.className = `p-3 rounded bg-zinc-800 border-l-4 ${b.alive ? 'border-blue-500' : 'border-red-500 opacity-50'}`;
+                card.innerHTML = `
+                    <div class="flex justify-between text-xs mb-1">
+                        <span class="font-bold font-mono">${b.id.substring(0, 8)}</span>
+                        <span>[${b.pos[0]}, ${b.pos[1]}]</span>
+                    </div>
+                    <div class="flex gap-2">
+                        <span title="Броня">🛡️ ${b.armor}</span>
+                        <span title="Доступно бомб">💣 ${b.bombs_available}</span>
+                        <span class="ml-auto ${b.can_move ? 'text-green-500' : 'text-orange-400'} text-[10px]">
+                            ${b.can_move ? 'READY' : 'MOVING'}
+                        </span>
+                    </div>
+                `;
+                list.appendChild(card);
+            });
+        }
+
+        // Управление циклом опроса
+        function startPolling() {
+            config.isPolling = true;
+            document.getElementById('btn-status').innerText = 'STOP';
+            document.getElementById('btn-status').classList.replace('bg-green-600', 'bg-red-600');
+        }
+
+        function stopPolling() {
+            config.isPolling = false;
+            document.getElementById('btn-status').innerText = 'START';
+            document.getElementById('btn-status').classList.replace('bg-red-600', 'bg-green-600');
+        }
+
+        // Запуск основного цикла (3 запроса в секунду согласно лимитам)
+        setInterval(fetchGameState, 1000);
+
+        // Добавим панель ввода токена в HTML динамически для удобства
+        document.body.insertAdjacentHTML('afterbegin', `
+            <div id="setup-panel" class="absolute top-4 right-4 z-50 bg-zinc-800 p-3 rounded shadow-xl flex gap-3 items-center border border-zinc-700">
+                <input id="token-input" type="password" placeholder="API Token" class="bg-zinc-900 border border-zinc-600 px-2 py-1 rounded text-xs w-48" value="${config.token}">
+                <select id="server-select" class="bg-zinc-900 border border-zinc-600 px-2 py-1 rounded text-xs">
+                    <option value="https://games-test.datsteam.dev">TEST</option>
+                    <option value="https://games.datsteam.dev">PROD</option>
+                </select>
+                <button id="btn-status" class="bg-green-600 px-4 py-1 rounded text-xs font-bold">START</button>
+            </div>
+        `);
+
+        // Обработчики событий панели
+        document.getElementById('token-input').addEventListener('change', (e) => {
+            config.token = e.target.value;
+            localStorage.setItem('dats_token', config.token);
+        });
+
+        document.getElementById('server-select').addEventListener('change', (e) => {
+            config.server = e.target.value;
+        });
+
+        document.getElementById('btn-status').addEventListener('click', () => {
+            config.isPolling ? stopPolling() : startPolling();
+        });
+    </script>
+</body>
+</html>
